@@ -1,7 +1,7 @@
 """
 Build Script for ProProxy
 Compiles the application into a single standalone Windows executable (ProProxy.exe)
-using PyInstaller with icon, cloud, and updater assets embedded.
+using PyInstaller with icon, cloud, updater, and Universal App Proxy assets embedded.
 """
 
 import os
@@ -64,6 +64,10 @@ def build_executable():
         f"--add-data={os.path.join(base_dir, 'icon.png')};.",
         f"--add-data={os.path.join(base_dir, 'tray_on.png')};.",
         f"--add-data={os.path.join(base_dir, 'tray_off.png')};.",
+        f"--add-binary={os.path.join(base_dir, 'bin', 'tun2socks.exe')};bin",
+        f"--add-binary={os.path.join(base_dir, 'bin', 'wintun.dll')};bin",
+        f"--add-data={os.path.join(base_dir, 'bin', 'tun2socks.exe')};bin",
+        f"--add-data={os.path.join(base_dir, 'bin', 'wintun.dll')};bin",
         "--clean",
         "-y"
     ]

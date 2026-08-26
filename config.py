@@ -16,6 +16,8 @@ CONFIG_FILE_PATH = os.path.join(BASE_DIR, "settings.json")
 DEFAULT_CONFIG: Dict[str, Any] = {
     "proxy_ip": "172.31.100.110",
     "proxy_port": "3128",
+    "proxy_mode": "system",       # "system" (WinINet) or "universal" (tun2socks/Wintun)
+    "proxy_type": "socks5",       # "socks5" or "http"
     "networks": ["MNNIT", "Naman_5g"],
     "check_interval": 5,
     "auto_start": True,
