@@ -617,7 +617,7 @@ class ProProxyApp(ctk.CTk):
         # Proxy IP Input
         ctk.CTkLabel(
             left_panel,
-            text="Proxy IP / Hostname:",
+            text="Proxy Address:",
             font=ctk.CTkFont(size=12, weight="bold")
         ).pack(anchor="w", padx=16, pady=(4, 2))
 
@@ -650,7 +650,7 @@ class ProProxyApp(ctk.CTk):
 
         self.chk_autostart = ctk.CTkCheckBox(
             options_box,
-            text="Auto-start monitoring on launch",
+            text="Turn on automatically when app opens",
             font=ctk.CTkFont(size=12),
             command=self._on_settings_modified
         )
@@ -658,7 +658,7 @@ class ProProxyApp(ctk.CTk):
 
         self.chk_windows_startup = ctk.CTkCheckBox(
             options_box,
-            text="Start with Windows (Launch on boot)",
+            text="Start app when computer turns on",
             font=ctk.CTkFont(size=12),
             command=self._on_windows_startup_toggled
         )
@@ -666,7 +666,7 @@ class ProProxyApp(ctk.CTk):
 
         self.chk_minimize_tray = ctk.CTkCheckBox(
             options_box,
-            text="Minimize to System Tray on close",
+            text="Keep running in background when closed",
             font=ctk.CTkFont(size=12),
             command=self._on_settings_modified
         )
@@ -707,8 +707,8 @@ class ProProxyApp(ctk.CTk):
         ctk.CTkLabel(
             left_panel,
             text="🚀 Service Controller",
-            font=ctk.CTkFont(size=13, weight="bold")
-        ).pack(anchor="w", padx=16, pady=(2, 4))
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=16, pady=(4, 6))
 
         self.btn_toggle_service = ctk.CTkButton(
             left_panel,
@@ -773,7 +773,7 @@ class ProProxyApp(ctk.CTk):
         # Panel Title
         ctk.CTkLabel(
             right_panel,
-            text="📡 Monitored Wi-Fi Networks",
+            text="📡 Proxy Networks",
             font=ctk.CTkFont(size=16, weight="bold")
         ).grid(row=0, column=0, padx=16, pady=(14, 4), sticky="w")
 
@@ -791,7 +791,7 @@ class ProProxyApp(ctk.CTk):
 
         self.entry_new_ssid = ctk.CTkEntry(
             add_box,
-            placeholder_text="Enter Wi-Fi SSID (e.g. MNNIT or Naman_5g)",
+            placeholder_text="Enter Wi-Fi Name (e.g. MNNIT or Naman_5g)",
             height=34
         )
         self.entry_new_ssid.grid(row=0, column=0, padx=(0, 6), sticky="ew")
@@ -869,7 +869,7 @@ class ProProxyApp(ctk.CTk):
 
         ctk.CTkLabel(
             log_header,
-            text="📋 Activity & Event Log",
+            text="📋 Activity Log",
             font=ctk.CTkFont(size=13, weight="bold")
         ).grid(row=0, column=0, sticky="w")
 
