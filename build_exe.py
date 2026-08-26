@@ -1,8 +1,8 @@
 """
 Build Script for ProProxy
 Compiles the application into a single standalone Windows executable (ProProxy.exe)
-using PyInstaller with icon, cloud, updater, and Universal App Proxy assets embedded.
-Requests Administrator privileges via embedded UAC manifest (--uac-admin).
+using PyInstaller with icon, cloud, updater, sing-box, and tun2socks assets embedded.
+Requests Administrator privileges directly via embedded UAC manifest (--uac-admin).
 """
 
 import os
@@ -21,22 +21,29 @@ def build_executable():
     work_dir = os.path.join(tempfile.gettempdir(), "proproxy_pyi_build")
     output_exe = os.path.join(dist_dir, "ProProxy.exe")
 
-    # Force terminate any running instances of ProProxy.exe before building
+    # Force terminate non-elevated instances of ProProxy.exe before building
     if sys.platform == "win32":
         try:
             subprocess.run(["taskkill", "/F", "/IM", "ProProxy.exe"], capture_output=True)
-            time.sleep(1)
+            time.sleep(0.5)
         except Exception:
             pass
 
-    # Ensure output_exe is removed prior to packaging
+    # Ensure output_exe is freed prior to packaging (rotate if in use)
     if os.path.exists(output_exe):
-        for _ in range(6):
+        try:
+            os.remove(output_exe)
+        except Exception:
             try:
-                os.remove(output_exe)
-                break
-            except Exception:
-                time.sleep(0.8)
+                old_backup = os.path.join(dist_dir, "ProProxy.old.exe")
+                if os.path.exists(old_backup):
+                    try:
+                        os.remove(old_backup)
+                    except Exception:
+                        pass
+                os.rename(output_exe, old_backup)
+            except Exception as e:
+                print(f"[Build] Note on rotating existing binary: {e}")
 
     # Ensure icon exists before building
     if not os.path.exists(icon_path):
@@ -66,8 +73,10 @@ def build_executable():
         f"--add-data={os.path.join(base_dir, 'icon.png')};.",
         f"--add-data={os.path.join(base_dir, 'tray_on.png')};.",
         f"--add-data={os.path.join(base_dir, 'tray_off.png')};.",
+        f"--add-binary={os.path.join(base_dir, 'bin', 'sing-box.exe')};bin",
         f"--add-binary={os.path.join(base_dir, 'bin', 'tun2socks.exe')};bin",
         f"--add-binary={os.path.join(base_dir, 'bin', 'wintun.dll')};bin",
+        f"--add-data={os.path.join(base_dir, 'bin', 'sing-box.exe')};bin",
         f"--add-data={os.path.join(base_dir, 'bin', 'tun2socks.exe')};bin",
         f"--add-data={os.path.join(base_dir, 'bin', 'wintun.dll')};bin",
         "--clean",
