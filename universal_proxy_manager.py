@@ -37,20 +37,25 @@ def is_admin() -> bool:
 def relaunch_as_admin(arguments: str = "") -> bool:
     """Relaunches the application with UAC Administrator elevation."""
     try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
         if getattr(sys, "frozen", False):
             target_exe = sys.executable
             params = arguments
+            work_dir = os.path.dirname(target_exe)
         else:
             target_exe = sys.executable
-            script_path = os.path.abspath(sys.argv[0])
-            params = f'"{script_path}" {arguments}'.strip()
+            main_script = os.path.join(base_dir, "main.py")
+            if not os.path.exists(main_script):
+                main_script = os.path.abspath(sys.argv[0])
+            params = f'"{main_script}" {arguments}'.strip()
+            work_dir = base_dir
 
         ret = ctypes.windll.shell32.ShellExecuteW(
             None,
             "runas",
             target_exe,
             params,
-            None,
+            work_dir,
             1  # SW_SHOWNORMAL
         )
         return int(ret) > 32

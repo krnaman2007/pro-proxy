@@ -13,26 +13,24 @@ RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 APP_REG_NAME = "ProProxy"
 
 
-def get_startup_command() -> str:
+def get_startup_command(minimized: bool = True) -> str:
     """
     Constructs the command to execute on Windows login.
     Supports both frozen PyInstaller executable and python script mode.
     Adds '--minimized' flag so the app starts directly to the system tray.
     """
+    flag = " --minimized" if minimized else ""
     if getattr(sys, "frozen", False):
-        # Running as compiled .exe (PyInstaller)
         exe_path = sys.executable
-        return f'"{exe_path}" --minimized'
+        return f'"{exe_path}"{flag}'
     else:
-        # Running as python script
-        # Prefer pythonw.exe if available to avoid opening a console window on boot
         executable = sys.executable
         pythonw_candidate = os.path.join(os.path.dirname(executable), "pythonw.exe")
         if os.path.exists(pythonw_candidate):
             executable = pythonw_candidate
 
         main_script = os.path.abspath(os.path.join(os.path.dirname(__file__), "main.py"))
-        return f'"{executable}" "{main_script}" --minimized'
+        return f'"{executable}" "{main_script}"{flag}'
 
 
 def is_autostart_enabled() -> bool:
@@ -51,7 +49,7 @@ def is_autostart_enabled() -> bool:
         return False
 
 
-def set_autostart(enable: bool) -> Tuple[bool, str]:
+def set_autostart(enable: bool, minimized: bool = True) -> Tuple[bool, str]:
     """
     Enables or disables automatic startup on Windows login.
     Returns (success: bool, message: str).
@@ -64,7 +62,7 @@ def set_autostart(enable: bool) -> Tuple[bool, str]:
             winreg.KEY_SET_VALUE
         ) as key:
             if enable:
-                cmd = get_startup_command()
+                cmd = get_startup_command(minimized=minimized)
                 winreg.SetValueEx(key, APP_REG_NAME, 0, winreg.REG_SZ, cmd)
                 return True, f"Startup enabled: {cmd}"
             else:
