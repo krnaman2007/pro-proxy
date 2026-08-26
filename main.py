@@ -533,7 +533,7 @@ class ProProxyApp(ctk.CTk):
         # ---------------------------------------------------------------------
         # LEFT PANEL: Proxy Settings & System Startup Controls
         # ---------------------------------------------------------------------
-        left_panel = ctk.CTkFrame(content_frame, corner_radius=12)
+        left_panel = ctk.CTkScrollableFrame(content_frame, corner_radius=12)
         left_panel.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="nsew")
         left_panel.grid_columnconfigure(0, weight=1)
 
@@ -553,7 +553,7 @@ class ProProxyApp(ctk.CTk):
 
         self.entry_ip = ctk.CTkEntry(
             left_panel,
-            placeholder_text="e.g. 172.31.100.110 or proxy.naman.com",
+            placeholder_text="e.g. 172.31.100.27 or proxy.naman.com",
             height=34
         )
         self.entry_ip.pack(fill="x", padx=16, pady=(0, 8))
@@ -831,7 +831,7 @@ class ProProxyApp(ctk.CTk):
 
     def _load_settings_into_ui(self):
         """Loads settings from ConfigManager and Registry into the UI inputs."""
-        ip_val = self.config_mgr.get("proxy_ip", "172.31.100.110")
+        ip_val = self.config_mgr.get("proxy_ip", "172.31.100.27")
         port_val = str(self.config_mgr.get("proxy_port", "3128"))
 
         self.entry_ip.delete(0, "end")
@@ -1234,7 +1234,7 @@ class ProProxyApp(ctk.CTk):
         monitored_networks = self.config_mgr.get_networks()
         is_match = wifi_manager.is_wifi_matching(monitored_networks, current_ssid)
 
-        proxy_ip = self.config_mgr.get("proxy_ip", "172.31.100.110")
+        proxy_ip = self.config_mgr.get("proxy_ip", "172.31.100.27")
         proxy_port = self.config_mgr.get("proxy_port", "3128")
 
         # Update Dashboard Status

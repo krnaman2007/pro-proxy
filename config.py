@@ -14,7 +14,7 @@ CONFIG_FILE_PATH = os.path.join(BASE_DIR, "settings.json")
 
 # Default configuration template
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "proxy_ip": "172.31.100.110",
+    "proxy_ip": "172.31.100.27",
     "proxy_port": "3128",
     "networks": ["MNNIT", "Naman_5g"],
     "check_interval": 5,
