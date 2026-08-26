@@ -1,8 +1,8 @@
 {
     "proxy_ip": "172.31.100.27",
     "proxy_port": "3128",
-    "proxy_mode": "system",
-    "proxy_type": "socks5",
+    "proxy_mode": "universal",
+    "proxy_type": "http",
     "networks": [
         "MNNIT",
         "Tenda_24ECA0"

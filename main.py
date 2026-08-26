@@ -541,7 +541,7 @@ class ProProxyApp(ctk.CTk):
         # ---------------------------------------------------------------------
         # LEFT PANEL: Proxy Settings & System Startup Controls
         # ---------------------------------------------------------------------
-        left_panel = ctk.CTkFrame(content_frame, corner_radius=12)
+        left_panel = ctk.CTkScrollableFrame(content_frame, corner_radius=12)
         left_panel.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="nsew")
         left_panel.grid_columnconfigure(0, weight=1)
 
@@ -975,7 +975,7 @@ class ProProxyApp(ctk.CTk):
     def _on_windows_startup_toggled(self):
         """Handles user clicking the 'Start with Windows' checkbox."""
         enable = bool(self.chk_windows_startup.get())
-        success, message = set_autostart(enable, minimized=True)
+        success, message = set_autostart(enable)
         if success:
             self.config_mgr.set("start_with_windows", enable, auto_save=True)
             status = "enabled" if enable else "disabled"
