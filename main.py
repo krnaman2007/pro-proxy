@@ -501,7 +501,7 @@ class ProProxyApp(ctk.CTk):
 
         ctk.CTkLabel(
             switch_card,
-            text="⚙️ SWITCH RULE DECISION",
+            text="⚙️ ACTION TAKEN",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="gray60"
         ).pack(anchor="w", padx=12, pady=(10, 2))
@@ -547,7 +547,7 @@ class ProProxyApp(ctk.CTk):
         # Proxy IP Input
         ctk.CTkLabel(
             left_panel,
-            text="Proxy IP / Hostname:",
+            text="Proxy Address:",
             font=ctk.CTkFont(size=12, weight="bold")
         ).pack(anchor="w", padx=16, pady=(2, 2))
 
@@ -580,7 +580,7 @@ class ProProxyApp(ctk.CTk):
 
         self.chk_autostart = ctk.CTkCheckBox(
             options_box,
-            text="Auto-start monitoring on launch",
+            text="Start checking Wi-Fi automatically",
             font=ctk.CTkFont(size=12),
             command=self._on_settings_modified
         )
@@ -588,7 +588,7 @@ class ProProxyApp(ctk.CTk):
 
         self.chk_windows_startup = ctk.CTkCheckBox(
             options_box,
-            text="Start with Windows (Launch on boot)",
+            text="Start app when computer turns on",
             font=ctk.CTkFont(size=12),
             command=self._on_windows_startup_toggled
         )
@@ -596,7 +596,7 @@ class ProProxyApp(ctk.CTk):
 
         self.chk_minimize_tray = ctk.CTkCheckBox(
             options_box,
-            text="Minimize to System Tray on close",
+            text="Keep running in background when closed",
             font=ctk.CTkFont(size=12),
             command=self._on_settings_modified
         )
@@ -636,7 +636,7 @@ class ProProxyApp(ctk.CTk):
         # Service Control Section
         ctk.CTkLabel(
             left_panel,
-            text="🚀 Service Controller",
+            text="🚀 Power Controls",
             font=ctk.CTkFont(size=14, weight="bold")
         ).pack(anchor="w", padx=16, pady=(4, 6))
 
@@ -703,7 +703,7 @@ class ProProxyApp(ctk.CTk):
         # Panel Title
         ctk.CTkLabel(
             right_panel,
-            text="📡 Monitored Wi-Fi Networks",
+            text="📡 Proxy Networks",
             font=ctk.CTkFont(size=16, weight="bold")
         ).grid(row=0, column=0, padx=16, pady=(14, 4), sticky="w")
 
@@ -721,7 +721,7 @@ class ProProxyApp(ctk.CTk):
 
         self.entry_new_ssid = ctk.CTkEntry(
             add_box,
-            placeholder_text="Enter Wi-Fi SSID (e.g. MNNIT or Naman_5g)",
+            placeholder_text="Enter Wi-Fi Name (e.g. MNNIT or Naman_5g)",
             height=34
         )
         self.entry_new_ssid.grid(row=0, column=0, padx=(0, 6), sticky="ew")
@@ -1065,12 +1065,15 @@ class ProProxyApp(ctk.CTk):
         if wifi_info.get("connected") and wifi_info.get("ssid"):
             ssid = wifi_info["ssid"]
             signal = wifi_info.get("signal", "")
-            signal_str = f" ({signal})" if signal else ""
             self.dash_wifi_ssid.configure(
-                text=f"{ssid}{signal_str}",
+                text=f"{ssid}",
                 text_color=("#2563EB", "#60A5FA")
             )
-            self.dash_wifi_detail.configure(text=f"Interface: {wifi_info.get('interface_name', 'Wi-Fi')} | Connected")
+            
+            detail_text = f"Interface: {wifi_info.get('interface_name', 'Wi-Fi')} | Connected"
+            if signal:
+                detail_text += f" | Signal Strength: {signal}"
+            self.dash_wifi_detail.configure(text=detail_text)
         elif wifi_info.get("state") == "no_interface":
             self.dash_wifi_ssid.configure(text="No Wi-Fi Adapter", text_color="gray60")
             self.dash_wifi_detail.configure(text="No wireless card detected")
