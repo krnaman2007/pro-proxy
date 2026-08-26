@@ -1,0 +1,13 @@
+{
+    "proxy_ip": "172.31.100.110",
+    "proxy_port": "3128",
+    "networks": [
+        "MNNIT",
+        "Tenda_24ECA0"
+    ],
+    "check_interval": 5,
+    "auto_start": true,
+    "start_with_windows": false,
+    "minimize_to_tray": true,
+    "theme": "Dark"
+}

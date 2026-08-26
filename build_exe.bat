@@ -1,0 +1,9 @@
+@echo off
+title Building ProProxy Executable...
+echo Installing dependencies if needed...
+python -m pip install -r requirements.txt
+echo.
+echo Building single executable ProProxy.exe...
+python build_exe.py
+echo.
+pause
