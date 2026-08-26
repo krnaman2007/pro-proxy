@@ -2,6 +2,7 @@
 Build Script for ProProxy
 Compiles the application into a single standalone Windows executable (ProProxy.exe)
 using PyInstaller with icon, cloud, updater, and Universal App Proxy assets embedded.
+Requests Administrator privileges via embedded UAC manifest (--uac-admin).
 """
 
 import os
@@ -53,6 +54,7 @@ def build_executable():
         "--name=ProProxy",
         "--onefile",             # Package everything into a single .exe
         "--noconsole",           # Windowed application (no black console window)
+        "--uac-admin",           # Request Administrator privileges directly on app launch
         f"--icon={icon_path}",   # Embed application icon
         f"--distpath={dist_dir}",
         f"--workpath={work_dir}",

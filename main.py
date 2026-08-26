@@ -124,6 +124,11 @@ class ProProxyApp(ctk.CTk):
         if start_minimized:
             self.withdraw()
             self.log_message("Started minimized to system tray.")
+        else:
+            # Bring window to foreground cleanly
+            self.deiconify()
+            self.lift()
+            self.focus_force()
 
         # Trigger background Cloud & Update check
         threading.Thread(target=self._initial_cloud_check, daemon=True).start()
@@ -389,12 +394,28 @@ class ProProxyApp(ctk.CTk):
         title_box = ctk.CTkFrame(header_frame, fg_color="transparent")
         title_box.grid(row=0, column=0, sticky="w")
 
+        title_row = ctk.CTkFrame(title_box, fg_color="transparent")
+        title_row.pack(anchor="w")
+
         title_lbl = ctk.CTkLabel(
-            title_box,
+            title_row,
             text=f"⚡ ProProxy  v{APP_VERSION}",
             font=ctk.CTkFont(size=22, weight="bold")
         )
-        title_lbl.pack(anchor="w")
+        title_lbl.pack(side="left")
+
+        if universal_proxy_manager.is_admin():
+            admin_badge = ctk.CTkLabel(
+                title_row,
+                text="🛡️ ADMIN",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color=("#DCFCE7", "#064E3B"),
+                text_color=("#16A34A", "#34D399"),
+                corner_radius=6,
+                padx=6,
+                pady=1
+            )
+            admin_badge.pack(side="left", padx=(8, 0))
 
         sub_lbl = ctk.CTkLabel(
             title_box,
@@ -966,7 +987,8 @@ class ProProxyApp(ctk.CTk):
     def _on_elevate_clicked(self):
         """Requests UAC elevation to restart the application as administrator."""
         if universal_proxy_manager.relaunch_as_admin():
-            self.quit_application()
+            self.withdraw()
+            self.after(800, self.destroy)
 
     def _on_settings_modified(self):
         """Called whenever an entry or checkbox is changed in the UI."""
@@ -1576,9 +1598,23 @@ class ProProxyApp(ctk.CTk):
 
 
 def main():
-    """Application entry point."""
-    app = ProProxyApp()
-    app.mainloop()
+    """Application entry point with error safeguarding."""
+    try:
+        app = ProProxyApp()
+        app.mainloop()
+    except Exception as error:
+        import traceback
+        err_msg = traceback.format_exc()
+        try:
+            with open("proproxy_error.log", "w", encoding="utf-8") as f:
+                f.write(err_msg)
+        except Exception:
+            pass
+        try:
+            tkmb.showerror("ProProxy Startup Notice", f"An unexpected error occurred:\n\n{error}\n\nCheck proproxy_error.log for details.")
+        except Exception:
+            pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":
