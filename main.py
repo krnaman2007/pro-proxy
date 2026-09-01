@@ -1,18 +1,20 @@
 """
 ProProxy - Main Application
 A modern Windows 10 & 11 desktop application to automatically enable/disable
-the Windows system proxy or Universal App Proxy (tun2socks) based on Wi-Fi SSID.
+the Windows system proxy based on active network connection (Ethernet & Wi-Fi SSIDs).
 
 Features:
-- Dual Modes: Windows System Proxy (WinINet) & Universal App Proxy (tun2socks/Wintun).
-- Transparent redirection for all Windows applications (games, CLI, Discord, etc.).
+- Network-Aware Proxy Switching:
+  - Auto-enables proxy when connected via Ethernet (LAN).
+  - Auto-enables proxy when connected to monitored Wi-Fi SSIDs.
+  - Auto-disables proxy when disconnecting or connecting to unmonitored networks.
+- State-Tracking Polling Worker: Prevents redundant repeated registry writes.
+- Smooth Scrollable Configuration Panel: Left settings panel is fully scrollable/slideable.
 - System Tray integration with minimize-to-tray & dynamic status icons.
 - Windows Startup support (Run on login via HKCU Run registry).
 - Cloud Telemetry (Supabase Heartbeat) & Real-time Remote Control.
 - Auto-Updater with GitHub Releases integration.
-- Live Wi-Fi interface detection (netsh wlan show interfaces).
-- Real-time proxy registry management.
-- Non-blocking background monitoring daemon.
+- Live Network & Wi-Fi interface detection.
 """
 
 import datetime
@@ -30,12 +32,12 @@ import pystray
 from autostart_manager import is_autostart_enabled, set_autostart
 import cloud_manager
 from config import ConfigManager
+import network_monitor
 import proxy_manager
-import universal_proxy_manager
 import updater
 import wifi_manager
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.5.0"
 
 # Set default CustomTkinter appearance
 ctk.set_appearance_mode("Dark")
@@ -67,12 +69,12 @@ class ProProxyApp(ctk.CTk):
         self.stop_event = threading.Event()
         self.is_quitting = False
 
-        # Cleanup any leftover routes from previous crashes
-        universal_proxy_manager.cleanup_on_startup()
+        # Last detected network state for switch debouncing
+        self.last_decision_state: Optional[str] = None
 
         # Cloud sync state
         self.last_cloud_sync = 0.0
-        self.cloud_sync_interval = 600.0  # Sync with Supabase every 10 minutes
+        self.cloud_sync_interval = 6.0  # Sync with Supabase every 6 seconds
 
         # System Tray State
         self.tray_icon: Optional[pystray.Icon] = None
@@ -83,7 +85,7 @@ class ProProxyApp(ctk.CTk):
         self.network_widgets: Dict[str, tuple[ctk.BooleanVar, ctk.CTkFrame]] = {}
 
         # --- Window Setup ---
-        self.title(f"ProProxy v{APP_VERSION} - Auto Proxy Switcher")
+        self.title(f"ProProxy v{APP_VERSION} - Dynamic Proxy Switcher")
         self.geometry("980x820")
         self.minsize(900, 720)
 
@@ -114,10 +116,6 @@ class ProProxyApp(ctk.CTk):
 
         # Log startup
         self.log_message(f"ProProxy v{APP_VERSION} initialized. Ready.")
-        if universal_proxy_manager.is_admin():
-            self.log_message("🛡️ Running with Administrator privileges.", "info")
-        else:
-            self.log_message("ℹ️ Running in standard user mode (Admin required for Universal App Proxy).", "info")
 
         # Check command-line arguments (e.g. launched at Windows login with --minimized)
         start_minimized = "--minimized" in sys.argv or "--tray" in sys.argv
@@ -125,7 +123,6 @@ class ProProxyApp(ctk.CTk):
             self.withdraw()
             self.log_message("Started minimized to system tray.")
         else:
-            # Bring window to foreground cleanly
             self.deiconify()
             self.lift()
             self.focus_force()
@@ -202,21 +199,14 @@ class ProProxyApp(ctk.CTk):
                     self.after(0, self._load_settings_into_ui)
 
         # 2. Send initial telemetry heartbeat
-        wifi_info = wifi_manager.get_current_wifi()
+        net_info = network_monitor.get_active_network_info()
+        current_net = "Ethernet" if net_info.get("is_ethernet") else net_info.get("ssid")
         proxy_info = proxy_manager.get_current_proxy_status()
         cloud_manager.send_heartbeat(
-            current_wifi=wifi_info.get("ssid"),
+            current_wifi=current_net,
             proxy_status=proxy_info.get("enabled", False),
             app_version=APP_VERSION
         )
-
-        # 3. Check for Updates via GitHub Releases
-        update_info = updater.check_for_updates(
-            current_version=APP_VERSION,
-            github_repo=cloud_manager.GITHUB_REPO
-        )
-        if update_info.get("update_available"):
-            self.after(0, lambda: self._prompt_update(update_info))
 
     def _trigger_kill_switch(self, message: str):
         """Displays kill switch notice and terminates the application."""
@@ -291,25 +281,16 @@ class ProProxyApp(ctk.CTk):
             menu
         )
 
-        # Run tray loop in dedicated background daemon thread
         self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
         self.tray_thread.start()
 
     def _get_tray_proxy_status_text(self) -> str:
         """Returns dynamic menu text for proxy status."""
-        mode = self.config_mgr.get("proxy_mode", "system")
-        if mode == "universal":
-            u_status = universal_proxy_manager.get_universal_proxy_status()
-            if u_status.get("enabled"):
-                target = u_status.get("proxy_target") or "Active"
-                return f"Universal Proxy: ON ({target})"
-            return "Universal Proxy: OFF"
-        else:
-            proxy_info = proxy_manager.get_current_proxy_status()
-            if proxy_info.get("enabled"):
-                server = proxy_info.get("server") or "Active"
-                return f"System Proxy: ON ({server})"
-            return "System Proxy: OFF"
+        proxy_info = proxy_manager.get_current_proxy_status()
+        if proxy_info.get("enabled"):
+            server = proxy_info.get("server") or "Active"
+            return f"System Proxy: ON ({server})"
+        return "System Proxy: OFF"
 
     def _get_tray_service_status_text(self) -> str:
         """Returns dynamic menu text for service state."""
@@ -324,8 +305,7 @@ class ProProxyApp(ctk.CTk):
         try:
             target_image = self.img_tray_on if proxy_enabled else self.img_tray_off
             self.tray_icon.icon = target_image
-            mode_str = self.config_mgr.get("proxy_mode", "system").title()
-            status_text = f"{mode_str} Proxy: ON" if proxy_enabled else f"{mode_str} Proxy: OFF"
+            status_text = "System Proxy: ON" if proxy_enabled else "System Proxy: OFF"
             service_text = "Running" if self.is_running else "Stopped"
             self.tray_icon.title = f"ProProxy [{status_text} | {service_text}]"
         except Exception:
@@ -361,9 +341,6 @@ class ProProxyApp(ctk.CTk):
         """Completely shuts down service, tray icon, and destroys window."""
         self.is_quitting = True
         self.stop_service()
-
-        # Stop both proxy engines cleanly
-        universal_proxy_manager.stop_universal_proxy()
         proxy_manager.disable_proxy()
 
         if self.tray_icon:
@@ -385,7 +362,7 @@ class ProProxyApp(ctk.CTk):
         self.banner_frame.grid(row=0, column=0, sticky="ew")
 
     def _build_header(self):
-        """Builds the modern header with title, version, status badge, and theme controls."""
+        """Builds modern header with title, version, status badge, and theme controls."""
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=1, column=0, padx=20, pady=(15, 5), sticky="ew")
         header_frame.grid_columnconfigure(0, weight=1)
@@ -394,32 +371,16 @@ class ProProxyApp(ctk.CTk):
         title_box = ctk.CTkFrame(header_frame, fg_color="transparent")
         title_box.grid(row=0, column=0, sticky="w")
 
-        title_row = ctk.CTkFrame(title_box, fg_color="transparent")
-        title_row.pack(anchor="w")
-
         title_lbl = ctk.CTkLabel(
-            title_row,
-            text=f"⚡ ProProxy  v{APP_VERSION}",
+            title_box,
+            text=f"⚡ ProProxy ",
             font=ctk.CTkFont(size=22, weight="bold")
         )
-        title_lbl.pack(side="left")
-
-        if universal_proxy_manager.is_admin():
-            admin_badge = ctk.CTkLabel(
-                title_row,
-                text="🛡️ ADMIN",
-                font=ctk.CTkFont(size=10, weight="bold"),
-                fg_color=("#DCFCE7", "#064E3B"),
-                text_color=("#16A34A", "#34D399"),
-                corner_radius=6,
-                padx=6,
-                pady=1
-            )
-            admin_badge.pack(side="left", padx=(8, 0))
+        title_lbl.pack(anchor="w")
 
         sub_lbl = ctk.CTkLabel(
             title_box,
-            text="Intelligent Auto Proxy Switcher & Universal App Proxy (tun2socks)",
+            text=" Auto Proxy Switcher (Ethernet & Wi-Fi)",
             font=ctk.CTkFont(size=12),
             text_color="gray60"
         )
@@ -469,44 +430,43 @@ class ProProxyApp(ctk.CTk):
         dash_frame.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
         dash_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        # Card 1: Current Wi-Fi Status
-        wifi_card = ctk.CTkFrame(dash_frame, fg_color=("gray90", "gray17"), corner_radius=10)
-        wifi_card.grid(row=0, column=0, padx=8, pady=8, sticky="nsew")
+        # Card 1: Current Connection (Ethernet or Wi-Fi)
+        conn_card = ctk.CTkFrame(dash_frame, fg_color=("gray90", "gray17"), corner_radius=10)
+        conn_card.grid(row=0, column=0, padx=8, pady=8, sticky="nsew")
 
         ctk.CTkLabel(
-            wifi_card,
-            text="📶 CURRENT WI-FI",
+            conn_card,
+            text="🌐 ACTIVE CONNECTION",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="gray60"
         ).pack(anchor="w", padx=12, pady=(10, 2))
 
-        self.dash_wifi_ssid = ctk.CTkLabel(
-            wifi_card,
+        self.dash_conn_name = ctk.CTkLabel(
+            conn_card,
             text="Detecting...",
             font=ctk.CTkFont(size=16, weight="bold"),
             text_color=("#2563EB", "#60A5FA")
         )
-        self.dash_wifi_ssid.pack(anchor="w", padx=12, pady=(0, 2))
+        self.dash_conn_name.pack(anchor="w", padx=12, pady=(0, 2))
 
-        self.dash_wifi_detail = ctk.CTkLabel(
-            wifi_card,
-            text="Checking interface...",
+        self.dash_conn_detail = ctk.CTkLabel(
+            conn_card,
+            text="Checking network adapter...",
             font=ctk.CTkFont(size=11),
             text_color="gray60"
         )
-        self.dash_wifi_detail.pack(anchor="w", padx=12, pady=(0, 10))
+        self.dash_conn_detail.pack(anchor="w", padx=12, pady=(0, 10))
 
-        # Card 2: Proxy Status (System or Universal)
+        # Card 2: System Proxy Status
         proxy_card = ctk.CTkFrame(dash_frame, fg_color=("gray90", "gray17"), corner_radius=10)
         proxy_card.grid(row=0, column=1, padx=8, pady=8, sticky="nsew")
 
-        self.dash_proxy_title = ctk.CTkLabel(
+        ctk.CTkLabel(
             proxy_card,
-            text="🌐 PROXY STATUS",
+            text="🌐 STATUS",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="gray60"
-        )
-        self.dash_proxy_title.pack(anchor="w", padx=12, pady=(10, 2))
+        ).pack(anchor="w", padx=12, pady=(10, 2))
 
         self.dash_proxy_status = ctk.CTkLabel(
             proxy_card,
@@ -530,7 +490,7 @@ class ProProxyApp(ctk.CTk):
 
         ctk.CTkLabel(
             switch_card,
-            text="⚙️ SWITCH RULE DECISION",
+            text="⚙️ Current Network ",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="gray60"
         ).pack(anchor="w", padx=12, pady=(10, 2))
@@ -552,122 +512,76 @@ class ProProxyApp(ctk.CTk):
         self.dash_match_detail.pack(anchor="w", padx=12, pady=(0, 10))
 
     def _build_main_content_area(self):
-        """Builds two-column area: Proxy settings on left, Wi-Fi list on right."""
+        """
+        Builds two-column area:
+        Left Column: Fully SCROLLABLE / SLIDING Proxy Configuration & Controller Panel.
+        Right Column: Monitored Wi-Fi Networks list.
+        """
         content_frame = ctk.CTkFrame(self, fg_color="transparent")
         content_frame.grid(row=3, column=0, padx=20, pady=5, sticky="nsew")
-        content_frame.grid_columnconfigure(0, weight=4)  # Left column
+        content_frame.grid_columnconfigure(0, weight=4)  # Left column (scrollable)
         content_frame.grid_columnconfigure(1, weight=5)  # Right column
         content_frame.grid_rowconfigure(0, weight=1)
 
         # ---------------------------------------------------------------------
-        # LEFT PANEL: Proxy Settings & System Startup Controls
+        # LEFT PANEL: Fully Scrollable / Sliding Proxy Configuration Panel
         # ---------------------------------------------------------------------
-        left_panel = ctk.CTkScrollableFrame(content_frame, corner_radius=12)
-        left_panel.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="nsew")
-        left_panel.grid_columnconfigure(0, weight=1)
+        self.left_scroll_panel = ctk.CTkScrollableFrame(
+            content_frame,
+            corner_radius=12,
+            fg_color=("gray90", "gray17")
+        )
+        self.left_scroll_panel.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="nsew")
+        self.left_scroll_panel.grid_columnconfigure(0, weight=1)
 
         # Panel Title
         ctk.CTkLabel(
-            left_panel,
+            self.left_scroll_panel,
             text="🔧 Proxy Configuration",
             font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=16, pady=(14, 8))
+        ).pack(anchor="w", padx=12, pady=(12, 8))
 
-        # Mode Selection: System Proxy vs Universal App Proxy
-        mode_box = ctk.CTkFrame(left_panel, fg_color="transparent")
-        mode_box.pack(fill="x", padx=16, pady=(0, 8))
-
+        # Proxy Address Input
         ctk.CTkLabel(
-            mode_box,
-            text="Redirection Mode:",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="gray60"
-        ).pack(anchor="w", pady=(0, 2))
-
-        self.seg_mode = ctk.CTkSegmentedButton(
-            mode_box,
-            values=["System Proxy", "Universal App Proxy"],
-            command=self._on_mode_switched,
-            height=30
-        )
-        self.seg_mode.pack(fill="x")
-
-        # Universal Mode Sub-panel (Protocol, Status Badge, Admin Button)
-        self.universal_panel = ctk.CTkFrame(left_panel, fg_color=("gray85", "gray20"), corner_radius=8)
-
-        u_row = ctk.CTkFrame(self.universal_panel, fg_color="transparent")
-        u_row.pack(fill="x", padx=10, pady=(6, 4))
-
-        ctk.CTkLabel(
-            u_row,
-            text="Protocol:",
-            font=ctk.CTkFont(size=11, weight="bold")
-        ).pack(side="left", padx=(0, 6))
-
-        self.opt_protocol = ctk.CTkOptionMenu(
-            u_row,
-            values=["SOCKS5", "HTTP"],
-            command=lambda v: self._on_settings_modified(),
-            width=90,
-            height=26
-        )
-        self.opt_protocol.pack(side="left")
-
-        self.lbl_engine_badge = ctk.CTkLabel(
-            u_row,
-            text="● ENGINE STOPPED",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            fg_color=("#E5E7EB", "#374151"),
-            text_color=("#6B7280", "#9CA3AF"),
-            corner_radius=6,
-            padx=8,
-            pady=2
-        )
-        self.lbl_engine_badge.pack(side="right")
-
-        self.btn_elevate = ctk.CTkButton(
-            self.universal_panel,
-            text="🛡️ Run as Administrator (Required)",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=("#F59E0B", "#D97706"),
-            hover_color=("#D97706", "#B45309"),
-            height=26,
-            command=self._on_elevate_clicked
-        )
-
-        # Proxy IP Input
-        ctk.CTkLabel(
-            left_panel,
+            self.left_scroll_panel,
             text="Proxy Address:",
             font=ctk.CTkFont(size=12, weight="bold")
-        ).pack(anchor="w", padx=16, pady=(4, 2))
+        ).pack(anchor="w", padx=12, pady=(4, 2))
 
         self.entry_ip = ctk.CTkEntry(
-            left_panel,
-            placeholder_text="e.g. 172.31.100.110 or proxy.naman.com",
+            self.left_scroll_panel,
+            placeholder_text="e.g. 172.31.100.27 or proxy.example.com",
             height=32
         )
-        self.entry_ip.pack(fill="x", padx=16, pady=(0, 6))
+        self.entry_ip.pack(fill="x", padx=12, pady=(0, 6))
         self.entry_ip.bind("<KeyRelease>", lambda e: self._on_settings_modified())
 
         # Proxy Port Input
         ctk.CTkLabel(
-            left_panel,
+            self.left_scroll_panel,
             text="Proxy Port:",
             font=ctk.CTkFont(size=12, weight="bold")
-        ).pack(anchor="w", padx=16, pady=(2, 2))
+        ).pack(anchor="w", padx=12, pady=(2, 2))
 
         self.entry_port = ctk.CTkEntry(
-            left_panel,
-            placeholder_text="e.g. 3128 or 1080",
+            self.left_scroll_panel,
+            placeholder_text="e.g. 3128 or 8080",
             height=32
         )
-        self.entry_port.pack(fill="x", padx=16, pady=(0, 8))
+        self.entry_port.pack(fill="x", padx=12, pady=(0, 8))
         self.entry_port.bind("<KeyRelease>", lambda e: self._on_settings_modified())
 
-        # Checkboxes: Auto-start service & Start with Windows
-        options_box = ctk.CTkFrame(left_panel, fg_color="transparent")
-        options_box.pack(fill="x", padx=16, pady=(0, 6))
+        # Checkboxes: Network & Application Options
+        options_box = ctk.CTkFrame(self.left_scroll_panel, fg_color="transparent")
+        options_box.pack(fill="x", padx=12, pady=(0, 6))
+
+        self.chk_ethernet_proxy = ctk.CTkCheckBox(
+            options_box,
+            text="🔌 Auto-enable proxy when on Ethernet (LAN)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._on_settings_modified
+        )
+        self.chk_ethernet_proxy.pack(anchor="w", pady=(2, 4))
 
         self.chk_autostart = ctk.CTkCheckBox(
             options_box,
@@ -694,8 +608,8 @@ class ProProxyApp(ctk.CTk):
         self.chk_minimize_tray.pack(anchor="w", pady=(1, 3))
 
         # Save & Refresh Button Row
-        save_box = ctk.CTkFrame(left_panel, fg_color="transparent")
-        save_box.pack(fill="x", padx=16, pady=(2, 8))
+        save_box = ctk.CTkFrame(self.left_scroll_panel, fg_color="transparent")
+        save_box.pack(fill="x", padx=12, pady=(4, 8))
         save_box.grid_columnconfigure((0, 1), weight=1)
 
         self.btn_save = ctk.CTkButton(
@@ -707,7 +621,7 @@ class ProProxyApp(ctk.CTk):
             height=30,
             command=self.save_settings
         )
-        self.btn_save.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        self.btn_save.grid(row=0, column=0, padx=(0, 4), sticky="ew")
 
         self.btn_refresh = ctk.CTkButton(
             save_box,
@@ -718,21 +632,21 @@ class ProProxyApp(ctk.CTk):
             height=30,
             command=self._refresh_live_status
         )
-        self.btn_refresh.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+        self.btn_refresh.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
         # Separator Line
-        separator = ctk.CTkFrame(left_panel, height=2, fg_color=("gray80", "gray25"))
-        separator.pack(fill="x", padx=16, pady=4)
+        separator = ctk.CTkFrame(self.left_scroll_panel, height=2, fg_color=("gray80", "gray25"))
+        separator.pack(fill="x", padx=12, pady=6)
 
         # Service Control Section
         ctk.CTkLabel(
-            left_panel,
+            self.left_scroll_panel,
             text="🚀 Service Controller",
             font=ctk.CTkFont(size=14, weight="bold")
-        ).pack(anchor="w", padx=16, pady=(4, 6))
+        ).pack(anchor="w", padx=12, pady=(4, 6))
 
         self.btn_toggle_service = ctk.CTkButton(
-            left_panel,
+            self.left_scroll_panel,
             text="▶ START PROXY SERVICE",
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color=("#10B981", "#059669"),
@@ -741,11 +655,11 @@ class ProProxyApp(ctk.CTk):
             corner_radius=8,
             command=self.toggle_service
         )
-        self.btn_toggle_service.pack(fill="x", padx=16, pady=(0, 6))
+        self.btn_toggle_service.pack(fill="x", padx=12, pady=(0, 6))
 
         # Manual Testing Controls
-        manual_box = ctk.CTkFrame(left_panel, fg_color="transparent")
-        manual_box.pack(fill="x", padx=16, pady=(0, 6))
+        manual_box = ctk.CTkFrame(self.left_scroll_panel, fg_color="transparent")
+        manual_box.pack(fill="x", padx=12, pady=(0, 6))
         manual_box.grid_columnconfigure((0, 1), weight=1)
 
         self.btn_manual_on = ctk.CTkButton(
@@ -772,16 +686,16 @@ class ProProxyApp(ctk.CTk):
 
         # Check for Updates Button
         self.btn_check_update = ctk.CTkButton(
-            left_panel,
+            self.left_scroll_panel,
             text="🔍 Check for Updates",
             font=ctk.CTkFont(size=11),
             fg_color="transparent",
             hover_color=("gray85", "gray25"),
             text_color=("gray40", "gray60"),
-            height=22,
+            height=24,
             command=self.check_updates_manual
         )
-        self.btn_check_update.pack(fill="x", padx=16, pady=(0, 8))
+        self.btn_check_update.pack(fill="x", padx=12, pady=(4, 12))
 
         # ---------------------------------------------------------------------
         # RIGHT PANEL: Monitored Wi-Fi Networks
@@ -794,7 +708,7 @@ class ProProxyApp(ctk.CTk):
         # Panel Title
         ctk.CTkLabel(
             right_panel,
-            text="📡 Proxy Networks",
+            text="📡 Added Proxy Networks",
             font=ctk.CTkFont(size=16, weight="bold")
         ).grid(row=0, column=0, padx=16, pady=(14, 4), sticky="w")
 
@@ -922,8 +836,7 @@ class ProProxyApp(ctk.CTk):
 
     def _load_settings_into_ui(self):
         """Loads configuration from settings.json into the UI widgets."""
-        # Proxy IP & Port
-        saved_ip = self.config_mgr.get("proxy_ip", "172.31.100.110")
+        saved_ip = self.config_mgr.get("proxy_ip", "172.31.100.27")
         saved_port = str(self.config_mgr.get("proxy_port", "3128"))
 
         self.entry_ip.delete(0, "end")
@@ -932,15 +845,8 @@ class ProProxyApp(ctk.CTk):
         self.entry_port.delete(0, "end")
         self.entry_port.insert(0, saved_port)
 
-        # Proxy Mode & Protocol
-        mode = self.config_mgr.get("proxy_mode", "system")
-        self.seg_mode.set("Universal App Proxy" if mode == "universal" else "System Proxy")
-        self._on_mode_switched(self.seg_mode.get())
-
-        proto = self.config_mgr.get("proxy_type", "socks5").upper()
-        self.opt_protocol.set(proto)
-
         # Checkboxes
+        self.chk_ethernet_proxy.select() if self.config_mgr.get("enable_ethernet_proxy", True) else self.chk_ethernet_proxy.deselect()
         self.chk_autostart.select() if self.config_mgr.get("auto_start", True) else self.chk_autostart.deselect()
         self.chk_minimize_tray.select() if self.config_mgr.get("minimize_to_tray", True) else self.chk_minimize_tray.deselect()
 
@@ -954,41 +860,15 @@ class ProProxyApp(ctk.CTk):
 
     def _sync_ui_to_config(self, auto_save: bool = True):
         """Pulls values from UI widgets and updates the ConfigManager instance."""
-        ip = self.entry_ip.get().strip() or "172.31.100.110"
+        ip = self.entry_ip.get().strip() or "172.31.100.27"
         port = self.entry_port.get().strip() or "3128"
 
         self.config_mgr.set("proxy_ip", ip, auto_save=False)
         self.config_mgr.set("proxy_port", port, auto_save=False)
+        self.config_mgr.set("enable_ethernet_proxy", bool(self.chk_ethernet_proxy.get()), auto_save=False)
         self.config_mgr.set("auto_start", bool(self.chk_autostart.get()), auto_save=False)
         self.config_mgr.set("minimize_to_tray", bool(self.chk_minimize_tray.get()), auto_save=False)
-        self.config_mgr.set("theme", self.theme_switch.get(), auto_save=False)
-
-        mode_val = "universal" if "Universal" in self.seg_mode.get() else "system"
-        self.config_mgr.set("proxy_mode", mode_val, auto_save=False)
-        self.config_mgr.set("proxy_type", self.opt_protocol.get().lower(), auto_save=auto_save)
-
-    def _on_mode_switched(self, selected_mode: str):
-        """Toggles between System Proxy and Universal App Proxy UI views."""
-        is_universal = "Universal" in selected_mode
-        mode_val = "universal" if is_universal else "system"
-        self.config_mgr.set("proxy_mode", mode_val, auto_save=True)
-
-        if is_universal:
-            self.universal_panel.pack(fill="x", padx=16, pady=(0, 6), after=self.seg_mode.master)
-            if not universal_proxy_manager.is_admin():
-                self.btn_elevate.pack(fill="x", padx=10, pady=(0, 6))
-            else:
-                self.btn_elevate.pack_forget()
-        else:
-            self.universal_panel.pack_forget()
-
-        self._refresh_live_status()
-
-    def _on_elevate_clicked(self):
-        """Requests UAC elevation to restart the application as administrator."""
-        if universal_proxy_manager.relaunch_as_admin():
-            self.withdraw()
-            self.after(800, self.destroy)
+        self.config_mgr.set("theme", self.theme_switch.get(), auto_save=auto_save)
 
     def _on_settings_modified(self):
         """Called whenever an entry or checkbox is changed in the UI."""
@@ -997,14 +877,13 @@ class ProProxyApp(ctk.CTk):
     def _on_windows_startup_toggled(self):
         """Handles user clicking the 'Start with Windows' checkbox."""
         enable = bool(self.chk_windows_startup.get())
-        success, message = set_autostart(enable)
+        success, message = set_autostart(enable, minimized=True)
         if success:
             self.config_mgr.set("start_with_windows", enable, auto_save=True)
             status = "enabled" if enable else "disabled"
             self.log_message(f"⚙️ Windows Startup {status} successfully.")
         else:
             self.log_message(f"❌ Failed to modify Windows Startup: {message}", "error")
-            # Revert checkbox state
             self.chk_windows_startup.select() if not enable else self.chk_windows_startup.deselect()
 
     def _on_theme_change(self, new_theme: str):
@@ -1218,144 +1097,95 @@ class ProProxyApp(ctk.CTk):
     # =========================================================================
 
     def _refresh_live_status(self):
-        """Refreshes the live dashboard widgets and tray icon based on active mode."""
-        # 1. Query Wi-Fi
-        wifi_info = wifi_manager.get_current_wifi()
-        if wifi_info.get("connected") and wifi_info.get("ssid"):
-            ssid = wifi_info["ssid"]
-            signal = wifi_info.get("signal", "")
-            signal_str = f" ({signal})" if signal else ""
-            self.dash_wifi_ssid.configure(
-                text=f"{ssid}{signal_str}",
+        """Refreshes the live dashboard widgets and tray icon."""
+        # 1. Query Active Network (Ethernet / Wi-Fi / Disconnected)
+        net_info = network_monitor.get_active_network_info()
+        if net_info.get("is_ethernet"):
+            iface_name = net_info.get("interface_name", "Ethernet")
+            self.dash_conn_name.configure(
+                text="🔌 Ethernet (LAN)",
+                text_color=("#10B981", "#34D399")
+            )
+            self.dash_conn_detail.configure(
+                text=f"Adapter: {iface_name} | IP: {net_info.get('ip_address', 'N/A')}"
+            )
+        elif net_info.get("type") == "wifi" and net_info.get("ssid"):
+            ssid = net_info["ssid"]
+            self.dash_conn_name.configure(
+                text=f"📶 {ssid}",
                 text_color=("#2563EB", "#60A5FA")
             )
-            self.dash_wifi_detail.configure(text=f"Interface: {wifi_info.get('interface_name', 'Wi-Fi')} | Connected")
-        elif wifi_info.get("state") == "no_interface":
-            self.dash_wifi_ssid.configure(text="No Wi-Fi Adapter", text_color="gray60")
-            self.dash_wifi_detail.configure(text="No wireless card detected")
+            self.dash_conn_detail.configure(
+                text=f"Wi-Fi Connected | IP: {net_info.get('ip_address', 'N/A')}"
+            )
+        elif net_info.get("type") == "disconnected":
+            self.dash_conn_name.configure(
+                text="❌ Disconnected",
+                text_color="gray60"
+            )
+            self.dash_conn_detail.configure(text="No active network connection detected")
         else:
-            self.dash_wifi_ssid.configure(text="Disconnected", text_color="gray60")
-            self.dash_wifi_detail.configure(text="Wi-Fi not connected")
+            iface = net_info.get("interface_name", "Network")
+            self.dash_conn_name.configure(
+                text=f"🌐 {iface}",
+                text_color=("#2563EB", "#60A5FA")
+            )
+            self.dash_conn_detail.configure(
+                text=f"IP: {net_info.get('ip_address', 'N/A')}"
+            )
 
-        # 2. Query Active Proxy based on Mode
-        mode = self.config_mgr.get("proxy_mode", "system")
+        # 2. Query System Proxy Status
+        proxy_info = proxy_manager.get_current_proxy_status()
+        is_proxy_enabled = proxy_info.get("enabled", False)
 
-        if mode == "universal":
-            self.dash_proxy_title.configure(text="⚡ UNIVERSAL PROXY STATUS")
-            u_status = universal_proxy_manager.get_universal_proxy_status()
-            is_proxy_enabled = u_status.get("enabled", False)
-            proto = self.config_mgr.get("proxy_type", "socks5").upper()
-
-            if is_proxy_enabled:
-                target = u_status.get("proxy_target") or f"{self.entry_ip.get()}:{self.entry_port.get()}"
-                self.dash_proxy_status.configure(
-                    text="🟢 UNIVERSAL PROXY ON",
-                    text_color=("#10B981", "#34D399")
-                )
-                self.dash_proxy_server.configure(text=f"TUN Routing -> {proto}://{target}")
-                self.lbl_engine_badge.configure(
-                    text="● ENGINE RUNNING",
-                    fg_color=("#DCFCE7", "#064E3B"),
-                    text_color=("#16A34A", "#34D399")
-                )
-            else:
-                if not universal_proxy_manager.is_admin():
-                    self.dash_proxy_status.configure(
-                        text="⚠️ ADMIN REQUIRED",
-                        text_color=("#F59E0B", "#FBBF24")
-                    )
-                    self.lbl_engine_badge.configure(
-                        text="⚠️ REQUIRES ADMIN",
-                        fg_color=("#FEF3C7", "#78350F"),
-                        text_color=("#D97706", "#FBBF24")
-                    )
-                else:
-                    self.dash_proxy_status.configure(
-                        text="🔴 UNIVERSAL PROXY OFF",
-                        text_color=("#EF4444", "#F87171")
-                    )
-                    self.lbl_engine_badge.configure(
-                        text="● ENGINE STOPPED",
-                        fg_color=("#E5E7EB", "#374151"),
-                        text_color=("#6B7280", "#9CA3AF")
-                    )
-                self.dash_proxy_server.configure(text=f"Universal Mode ({proto}) - Ready")
+        if is_proxy_enabled:
+            server = proxy_info.get("server") or "Active"
+            self.dash_proxy_status.configure(
+                text="🟢 SYSTEM PROXY ON",
+                text_color=("#10B981", "#34D399")
+            )
+            self.dash_proxy_server.configure(text=f"Active Server: {server}")
         else:
-            self.dash_proxy_title.configure(text="🌐 SYSTEM PROXY STATUS")
-            proxy_info = proxy_manager.get_current_proxy_status()
-            is_proxy_enabled = proxy_info.get("enabled", False)
-
-            if is_proxy_enabled:
-                server = proxy_info.get("server") or "Active"
-                self.dash_proxy_status.configure(
-                    text="🟢 SYSTEM PROXY ON",
-                    text_color=("#10B981", "#34D399")
-                )
-                self.dash_proxy_server.configure(text=f"Active Server: {server}")
-            else:
-                self.dash_proxy_status.configure(
-                    text="🔴 SYSTEM PROXY OFF",
-                    text_color=("#EF4444", "#F87171")
-                )
-                server = proxy_info.get("server")
-                self.dash_proxy_server.configure(
-                    text=f"Last Server: {server}" if server else "Server: None"
-                )
+            self.dash_proxy_status.configure(
+                text="🔴 SYSTEM PROXY OFF",
+                text_color=("#EF4444", "#F87171")
+            )
+            server = proxy_info.get("server")
+            self.dash_proxy_server.configure(
+                text=f"Last Server: {server}" if server else "Server: None"
+            )
 
         # Update system tray icon
         self._update_tray_icon(is_proxy_enabled)
 
     def _manual_enable_proxy(self):
-        """Manually enables proxy for the active mode."""
+        """Manually enables the Windows system proxy."""
         ip = self.entry_ip.get().strip()
         port = self.entry_port.get().strip()
         if not ConfigManager.validate_port(port):
             self.log_message(f"❌ Invalid port: {port}", "error")
             return
 
-        mode = self.config_mgr.get("proxy_mode", "system")
-        if mode == "universal":
-            if not universal_proxy_manager.is_admin():
-                self.log_message("❌ Universal App Proxy requires Administrator privileges.", "error")
-                if tkmb.askyesno("Admin Required", "Universal App Proxy Mode requires Administrator privileges to configure the network TUN driver.\n\nWould you like to restart ProProxy as Administrator now?"):
-                    self._on_elevate_clicked()
-                return
-
-            proto = self.config_mgr.get("proxy_type", "socks5")
-            success, msg = universal_proxy_manager.start_universal_proxy(ip, port, proto)
-            if success:
-                self.log_message(f"⚡ [Universal] {msg}")
-            else:
-                self.log_message(f"❌ [Universal] {msg}", "error")
+        success, msg = proxy_manager.enable_proxy(ip, port)
+        if success:
+            self.log_message(f"🌐 {msg}")
         else:
-            success, msg = proxy_manager.enable_proxy(ip, port)
-            if success:
-                self.log_message(f"🌐 [System] {msg}")
-            else:
-                self.log_message(f"❌ [System] {msg}", "error")
+            self.log_message(f"❌ {msg}", "error")
 
         self._refresh_live_status()
 
     def _manual_disable_proxy(self):
-        """Manually disables proxy for the active mode."""
-        mode = self.config_mgr.get("proxy_mode", "system")
-        if mode == "universal":
-            success, msg = universal_proxy_manager.stop_universal_proxy()
-            if success:
-                self.log_message(f"⚡ [Universal] {msg}")
-            else:
-                self.log_message(f"❌ [Universal] {msg}", "error")
+        """Manually disables the Windows system proxy."""
+        success, msg = proxy_manager.disable_proxy()
+        if success:
+            self.log_message(f"🌐 {msg}")
         else:
-            success, msg = proxy_manager.disable_proxy()
-            if success:
-                self.log_message(f"🌐 [System] {msg}")
-            else:
-                self.log_message(f"❌ [System] {msg}", "error")
+            self.log_message(f"❌ {msg}", "error")
 
         self._refresh_live_status()
 
     # =========================================================================
-    # BACKGROUND SERVICE & MONITORING LOOP
+    # BACKGROUND SERVICE & MONITORING LOOP (Network-Aware Polling)
     # =========================================================================
 
     def toggle_service(self):
@@ -1375,13 +1205,10 @@ class ProProxyApp(ctk.CTk):
             self.log_message(f"❌ Cannot start service: Invalid port '{port}'.", "error")
             return
 
-        mode = self.config_mgr.get("proxy_mode", "system")
-        if mode == "universal" and not universal_proxy_manager.is_admin():
-            self.log_message("⚠️ Note: Universal Mode selected without Admin rights. Starting service...", "warn")
-
         self._sync_ui_to_config(auto_save=True)
         self.is_running = True
         self.stop_event.clear()
+        self.last_decision_state = None  # Reset debouncing
 
         self.btn_toggle_service.configure(
             text="⏹ STOP PROXY SERVICE",
@@ -1398,8 +1225,7 @@ class ProProxyApp(ctk.CTk):
             text_color=("#10B981", "#34D399")
         )
 
-        mode_desc = "Universal App Proxy" if mode == "universal" else "System Proxy"
-        self.log_message(f"▶ ProProxy service STARTED [{mode_desc}]. Monitoring every 5s...")
+        self.log_message("▶ ProProxy service STARTED. Polling network adapters every 5s...")
 
         self.monitor_thread = threading.Thread(target=self._monitor_worker_loop, daemon=True)
         self.monitor_thread.start()
@@ -1411,13 +1237,7 @@ class ProProxyApp(ctk.CTk):
 
         self.is_running = False
         self.stop_event.set()
-
-        # Stop active proxy based on mode
-        mode = self.config_mgr.get("proxy_mode", "system")
-        if mode == "universal":
-            universal_proxy_manager.stop_universal_proxy()
-        else:
-            proxy_manager.disable_proxy()
+        proxy_manager.disable_proxy()
 
         self.btn_toggle_service.configure(
             text="▶ START PROXY SERVICE",
@@ -1438,8 +1258,8 @@ class ProProxyApp(ctk.CTk):
 
     def _monitor_worker_loop(self):
         """
-        Background thread loop that runs every 5 seconds.
-        Detects Wi-Fi network and triggers proxy switch logic safely.
+        Background thread loop that polls network adapters every 5 seconds.
+        Detects active Ethernet and Wi-Fi networks and triggers proxy switch logic safely.
         """
         try:
             if not self.stop_event.is_set():
@@ -1461,59 +1281,78 @@ class ProProxyApp(ctk.CTk):
 
     def _check_and_switch_proxy(self):
         """
-        Core detection and switching logic executed on UI thread.
-        Detects current Wi-Fi and enables/disables proxy accordingly.
+        Core network detection and state-tracking switching logic.
+        1. Checks if connected via Ethernet -> Enables proxy.
+        2. Checks if connected via monitored Wi-Fi -> Enables proxy.
+        3. Otherwise (unmonitored Wi-Fi or disconnected) -> Disables proxy.
+        Handles state correctly to prevent repeated redundant registry writes every 5s.
         """
-        if self.is_quitting:
+        if self.is_quitting or not self.is_running:
             return
 
-        wifi_info = wifi_manager.get_current_wifi()
-        is_connected = wifi_info.get("connected", False)
-        current_ssid = wifi_info.get("ssid")
+        net_info = network_monitor.get_active_network_info()
+        is_eth = net_info.get("is_ethernet", False)
+        net_type = net_info.get("type", "disconnected")
+        current_ssid = net_info.get("ssid")
 
-        monitored_networks = self.config_mgr.get_networks()
-        is_match = wifi_manager.is_wifi_matching(monitored_networks, current_ssid)
-
-        proxy_ip = self.config_mgr.get("proxy_ip", "172.31.100.110")
+        proxy_ip = self.config_mgr.get("proxy_ip", "172.31.100.27")
         proxy_port = self.config_mgr.get("proxy_port", "3128")
-        mode = self.config_mgr.get("proxy_mode", "system")
-        proto = self.config_mgr.get("proxy_type", "socks5")
+        target_server = f"{proxy_ip}:{proxy_port}"
+        auto_ethernet = self.config_mgr.get("enable_ethernet_proxy", True)
 
-        # Update Dashboard Status
-        self._refresh_live_status()
+        proxy_state = proxy_manager.get_current_proxy_status()
+        is_currently_enabled = proxy_state.get("enabled", False)
+        current_server = proxy_state.get("server", "")
 
-        if is_connected and current_ssid:
+        # -------------------------------------------------------------
+        # CASE 1: Ethernet Adapter Detected
+        # -------------------------------------------------------------
+        if is_eth and auto_ethernet:
+            decision_key = f"eth:{target_server}"
+            self.dash_match_status.configure(
+                text="Matched 'Ethernet' -> ON",
+                text_color=("#10B981", "#34D399")
+            )
+            self.dash_match_detail.configure(
+                text=f"Ethernet (LAN) -> {target_server}"
+            )
+
+            if not is_currently_enabled or current_server != target_server:
+                success, msg = proxy_manager.enable_proxy(proxy_ip, proxy_port)
+                if success:
+                    self.log_message(f"🔌 Connected to Ethernet (LAN) -> Enabled System Proxy ({target_server})")
+                else:
+                    self.log_message(f"❌ Failed to enable proxy: {msg}", "error")
+
+            self.last_decision_state = decision_key
+
+        # -------------------------------------------------------------
+        # CASE 2: Wi-Fi Connection
+        # -------------------------------------------------------------
+        elif net_type == "wifi" and current_ssid:
+            monitored_networks = self.config_mgr.get_networks()
+            is_match = wifi_manager.is_wifi_matching(monitored_networks, current_ssid)
+
             if is_match:
+                decision_key = f"wifi_match:{current_ssid}:{target_server}"
                 self.dash_match_status.configure(
                     text=f"Matched '{current_ssid}' -> ON",
                     text_color=("#10B981", "#34D399")
                 )
                 self.dash_match_detail.configure(
-                    text=f"Target: {proxy_ip}:{proxy_port} ({mode.title()})"
+                    text=f"Wi-Fi ({current_ssid}) -> {target_server}"
                 )
 
-                if mode == "universal":
-                    if not universal_proxy_manager.is_engine_running():
-                        if universal_proxy_manager.is_admin():
-                            success, msg = universal_proxy_manager.start_universal_proxy(proxy_ip, proxy_port, proto)
-                            if success:
-                                self.log_message(f"⚡ Connected to '{current_ssid}' (Match) -> Enabled Universal Proxy ({proto.upper()}://{proxy_ip}:{proxy_port})")
-                            else:
-                                self.log_message(f"❌ Failed to enable Universal Proxy: {msg}", "error")
-                        else:
-                            self.log_message("⚠️ Wi-Fi matched but Universal Proxy requires Administrator rights.", "warn")
-                else:
-                    proxy_state = proxy_manager.get_current_proxy_status()
-                    target_server = f"{proxy_ip}:{proxy_port}"
-                    if not proxy_state.get("enabled") or proxy_state.get("server") != target_server:
-                        success, msg = proxy_manager.enable_proxy(proxy_ip, proxy_port)
-                        if success:
-                            self.log_message(f"🟢 Connected to '{current_ssid}' (Match) -> Enabled System Proxy ({target_server})")
-                        else:
-                            self.log_message(f"❌ Failed to enable proxy: {msg}", "error")
+                if not is_currently_enabled or current_server != target_server:
+                    success, msg = proxy_manager.enable_proxy(proxy_ip, proxy_port)
+                    if success:
+                        self.log_message(f"📶 Connected to '{current_ssid}' (Match) -> Enabled System Proxy ({target_server})")
+                    else:
+                        self.log_message(f"❌ Failed to enable proxy: {msg}", "error")
 
-                self._refresh_live_status()
+                self.last_decision_state = decision_key
             else:
+                decision_key = f"wifi_unmatch:{current_ssid}"
                 self.dash_match_status.configure(
                     text=f"Unmatched '{current_ssid}' -> OFF",
                     text_color=("#F59E0B", "#FBBF24")
@@ -1522,51 +1361,43 @@ class ProProxyApp(ctk.CTk):
                     text="Not in monitored list -> Proxy disabled"
                 )
 
-                if mode == "universal":
-                    if universal_proxy_manager.is_engine_running():
-                        success, msg = universal_proxy_manager.stop_universal_proxy()
-                        self.log_message(f"🔴 Connected to '{current_ssid}' (Unmatched) -> Stopped Universal Proxy")
-                else:
-                    proxy_state = proxy_manager.get_current_proxy_status()
-                    if proxy_state.get("enabled"):
-                        success, msg = proxy_manager.disable_proxy()
-                        if success:
-                            self.log_message(f"🔴 Connected to '{current_ssid}' (Unmatched) -> Disabled System Proxy")
+                if is_currently_enabled:
+                    success, msg = proxy_manager.disable_proxy()
+                    if success:
+                        self.log_message(f"🔴 Connected to '{current_ssid}' (Unmatched) -> Disabled System Proxy")
 
-                self._refresh_live_status()
+                self.last_decision_state = decision_key
+
+        # -------------------------------------------------------------
+        # CASE 3: Disconnected or Other Interface
+        # -------------------------------------------------------------
         else:
+            decision_key = "disconnected"
             self.dash_match_status.configure(
                 text="Disconnected -> OFF",
                 text_color="gray60"
             )
             self.dash_match_detail.configure(
-                text="No active Wi-Fi connection"
+                text="No active internet adapter"
             )
 
-            if mode == "universal":
-                if universal_proxy_manager.is_engine_running():
-                    universal_proxy_manager.stop_universal_proxy()
-                    self.log_message("🔴 Disconnected from Wi-Fi -> Stopped Universal Proxy")
-            else:
-                proxy_state = proxy_manager.get_current_proxy_status()
-                if proxy_state.get("enabled"):
-                    success, msg = proxy_manager.disable_proxy()
-                    if success:
-                        self.log_message("🔴 Disconnected from Wi-Fi -> Disabled System Proxy")
+            if is_currently_enabled:
+                success, msg = proxy_manager.disable_proxy()
+                if success:
+                    self.log_message("🔴 Disconnected from network -> Disabled System Proxy")
 
-            self._refresh_live_status()
+            self.last_decision_state = decision_key
+
+        self._refresh_live_status()
 
         # Periodic background telemetry heartbeat sync
         now = time.time()
         if now - self.last_cloud_sync > self.cloud_sync_interval:
             self.last_cloud_sync = now
-            if mode == "universal":
-                active_flag = universal_proxy_manager.is_engine_running()
-            else:
-                active_flag = proxy_manager.get_current_proxy_status().get("enabled", False)
-
+            current_tag = "Ethernet" if is_eth else current_ssid
+            active_flag = proxy_manager.get_current_proxy_status().get("enabled", False)
             threading.Thread(
-                target=lambda: cloud_manager.send_heartbeat(current_ssid, active_flag, APP_VERSION),
+                target=lambda: cloud_manager.send_heartbeat(current_tag, active_flag, APP_VERSION),
                 daemon=True
             ).start()
 

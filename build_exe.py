@@ -1,8 +1,7 @@
 """
 Build Script for ProProxy
 Compiles the application into a single standalone Windows executable (ProProxy.exe)
-using PyInstaller with icon, cloud, updater, sing-box, and tun2socks assets embedded.
-Requests Administrator privileges directly via embedded UAC manifest (--uac-admin).
+using PyInstaller with icon, cloud, updater, network monitoring, and assets embedded.
 """
 
 import os
@@ -61,7 +60,6 @@ def build_executable():
         "--name=ProProxy",
         "--onefile",             # Package everything into a single .exe
         "--noconsole",           # Windowed application (no black console window)
-        "--uac-admin",           # Request Administrator privileges directly on app launch
         f"--icon={icon_path}",   # Embed application icon
         f"--distpath={dist_dir}",
         f"--workpath={work_dir}",
@@ -69,16 +67,11 @@ def build_executable():
         "--collect-all=pystray",
         "--collect-all=PIL",
         "--collect-all=requests",
+        "--collect-all=psutil",
         f"--add-data={os.path.join(base_dir, 'icon.ico')};.",
         f"--add-data={os.path.join(base_dir, 'icon.png')};.",
         f"--add-data={os.path.join(base_dir, 'tray_on.png')};.",
         f"--add-data={os.path.join(base_dir, 'tray_off.png')};.",
-        f"--add-binary={os.path.join(base_dir, 'bin', 'sing-box.exe')};bin",
-        f"--add-binary={os.path.join(base_dir, 'bin', 'tun2socks.exe')};bin",
-        f"--add-binary={os.path.join(base_dir, 'bin', 'wintun.dll')};bin",
-        f"--add-data={os.path.join(base_dir, 'bin', 'sing-box.exe')};bin",
-        f"--add-data={os.path.join(base_dir, 'bin', 'tun2socks.exe')};bin",
-        f"--add-data={os.path.join(base_dir, 'bin', 'wintun.dll')};bin",
         "--clean",
         "-y"
     ]

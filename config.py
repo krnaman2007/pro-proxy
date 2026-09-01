@@ -16,8 +16,7 @@ CONFIG_FILE_PATH = os.path.join(BASE_DIR, "settings.json")
 DEFAULT_CONFIG: Dict[str, Any] = {
     "proxy_ip": "172.31.100.27",
     "proxy_port": "3128",
-    "proxy_mode": "system",       # "system" (WinINet) or "universal" (tun2socks/Wintun)
-    "proxy_type": "socks5",       # "socks5" or "http"
+    "enable_ethernet_proxy": True,    # Automatically enable proxy when connected via Ethernet
     "networks": ["MNNIT", "Naman_5g"],
     "check_interval": 5,
     "auto_start": True,
@@ -171,10 +170,12 @@ class ConfigManager:
         return False
 
     @staticmethod
-    def validate_port(port_str: str | int) -> bool:
-        """Validates that port is an integer between 1 and 65535."""
+    def validate_port(port_val: Any) -> bool:
+        """
+        Validates whether a port number is an integer in the range 1-65535.
+        """
         try:
-            port = int(str(port_str).strip())
-            return 1 <= port <= 65535
+            port_num = int(str(port_val).strip())
+            return 1 <= port_num <= 65535
         except (ValueError, TypeError):
             return False
